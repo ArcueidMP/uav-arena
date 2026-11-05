@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.venv/
+
+# Local outputs (datasets, results, recordings, videos, checkpoints)
+runs/
+*.mp4
+
+# MuJoCo warning log
+MUJOCO_LOG.TXT

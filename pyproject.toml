@@ -1,0 +1,55 @@
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[project]
+name = "uav-arena"
+dynamic = ["version"]
+description = "A MuJoCo world-model arena for three-UAV cooperative transport of a cable-suspended payload, with tunable payload mass, wind and virtual cameras"
+readme = "README.md"
+license = "GPL-3.0-only"
+license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md"]
+requires-python = ">=3.10"
+authors = [{ name = "UAV Arena authors" }]
+keywords = ["world models", "multi-agent", "UAV", "MuJoCo", "cable-suspended payload", "benchmark"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+# MuJoCo is pinned exactly: arena-v0.3 parity is bit for bit, and MuJoCo releases change numerics.
+dependencies = [
+    "mujoco==3.3.0",
+    "numpy>=1.26",
+    "scipy>=1.10",
+]
+
+[project.optional-dependencies]
+gym = ["gymnasium>=1.0"]
+# `import stable_worldmodel` (0.1.1) loads OpenCV and imageio, which it does not declare.
+plan = ["gymnasium>=1.0", "torch>=2.1", "stable-worldmodel==0.1.1", "imageio>=2.30", "opencv-python-headless>=4.8"]
+video = ["opencv-python-headless>=4.8"]
+dev = ["pytest>=8"]
+all = ["uav-arena[gym,plan,video]"]
+
+[project.urls]
+Repository = "https://github.com/ArcueidMP/uav-arena"
+"Research code (arena-v0.3)" = "https://github.com/ArcueidMP/vincair-multi-agent-wm/tree/arena-v0.3"
+
+[tool.hatch.version]
+path = "src/uav_arena/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/uav_arena"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src", "tests", "tools", "docs", "examples", "README.md", "CHANGELOG.md", "LICENSE", "THIRD_PARTY_NOTICES.md"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "plan: needs the [plan] extra (torch, stable-worldmodel)",
+    "render: needs an OpenGL backend (set MUJOCO_GL=egl or osmesa on machines without a display)",
+    "slow: takes more than a minute",
+]

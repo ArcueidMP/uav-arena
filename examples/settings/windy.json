@@ -1,0 +1,9 @@
+{
+  "payload": {"mass_range": [0.02, 0.05]},
+  "wind": {
+    "speed": [0.5, 2.0],
+    "heading": null,
+    "gusts": {"rate": 0.2, "peak": [1.0, 3.0], "duration": [0.5, 2.0]},
+    "turbulence": {"intensity": [0.3, 0.3, 0.1], "time_scale": 1.0}
+  }
+}

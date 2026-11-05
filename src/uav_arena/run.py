@@ -1,0 +1,123 @@
+"""Run planners on arena suites and write per-episode records.
+
+    python -m uav_arena.run --predictor oracle --suite dev --seeds 0:5 --out runs/results/oracle_dev.json
+
+`--predictor` names a reference row (oracle, physics, adaptive) or a participant's world model as
+`module:factory`; the factory is called with the JSON `--predictor-options` as keyword arguments.
+`--settings` takes a JSON file of task settings (docs/settings.md); without it the task is arena-v0.3's.
+"""
+from __future__ import annotations
+
+import argparse
+from collections import Counter, defaultdict
+import importlib
+import json
+from pathlib import Path
+import time
+
+import numpy as np
+
+from .env import ArenaEnv
+from .scenarios import CONDITIONS, SUITE_SEEDS, make_scenario
+from .settings import load_settings
+
+
+def run_episode(scenario, planner):
+    env = ArenaEnv(scenario)
+    obs = env.reset()
+    planner.reset(scenario.seed)
+    plan_seconds = []
+    while not env.done:
+        start = time.perf_counter()
+        setpoints = planner.act(obs, env)
+        plan_seconds.append(time.perf_counter()-start)
+        obs, reward, done, info = env.step(setpoints)
+    record = dict(seed=scenario.seed, condition=scenario.condition.name, payload_mass=scenario.payload_mass,
+                  outcome=info["outcome"], time=info["time"], decisions=info["decisions"],
+                  distance_to_goal=info["distance_to_goal"], min_clearance=info["min_clearance"],
+                  plan_seconds_mean=float(np.mean(plan_seconds)), plan_seconds_max=float(np.max(plan_seconds)))
+    estimates = getattr(planner.cost.predictor, "estimates", None)
+    if estimates is not None:
+        record["mass_estimates"] = list(estimates)      # one per decision
+    return record
+
+
+def summarize(records):
+    by_condition = defaultdict(list)
+    for record in records:
+        by_condition[record["condition"]].append(record)
+    rows = []
+    for condition in [c.name for c in CONDITIONS if c.name in by_condition]:
+        items = by_condition[condition]
+        successes = [r for r in items if r["outcome"] == "success"]
+        rows.append(dict(condition=condition, episodes=len(items), success=len(successes),
+                         outcomes=dict(Counter(r["outcome"] for r in items)),
+                         success_time_mean=float(np.mean([r["time"] for r in successes])) if successes else None))
+    return rows
+
+
+def make_predictor(name, workers=None, options=None):
+    """A reference row by name, or a participant's predictor from a `module:factory` path."""
+    from .planning import AdaptivePhysicsPredictor, PhysicsPredictor, TrueSimPredictor
+    references = dict(oracle=TrueSimPredictor, physics=PhysicsPredictor, adaptive=AdaptivePhysicsPredictor)
+    if name in references:
+        return references[name](workers)
+    module, _, factory = name.partition(":")
+    if not factory:
+        raise ValueError(f"Expected oracle, physics, adaptive or module:factory, got {name!r}")
+    return getattr(importlib.import_module(module), factory)(**(options or {}))
+
+
+def make_planner(args):
+    from .planning import ArenaCost, ArenaPlanner, ConstrainedArenaCost
+    predictor = make_predictor(args.predictor, args.workers, json.loads(args.predictor_options))
+    cost = (ConstrainedArenaCost if args.solver == "lagrangian" else ArenaCost)(predictor)
+    return ArenaPlanner(cost, solver=args.solver, horizon=args.horizon, samples=args.samples,
+                        var_scale=args.var_scale, temperature=args.temperature, seed=args.seed), predictor
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--predictor", default="oracle",
+                        help="oracle (U), physics (nominal mass), adaptive (online mass estimation) or module:factory")
+    parser.add_argument("--predictor-options", default="{}", help="JSON keyword arguments for a module:factory predictor")
+    parser.add_argument("--solver", choices=("mppi", "lagrangian"), default="mppi")
+    parser.add_argument("--suite", choices=tuple(SUITE_SEEDS), default="dev")
+    parser.add_argument("--seeds", default="0:5", help="slice into the suite's seed list, e.g. 0:5")
+    parser.add_argument("--conditions", default="all", help="'all' or comma-separated names like static/0ms")
+    parser.add_argument("--horizon", type=int, default=15)
+    parser.add_argument("--samples", type=int, default=512)
+    parser.add_argument("--var-scale", type=float, default=0.04)
+    parser.add_argument("--temperature", type=float, default=0.05)
+    parser.add_argument("--workers", type=int, default=None)
+    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--settings", default=None, help="JSON task settings (docs/settings.md); default: arena-v0.3")
+    parser.add_argument("--out", required=True)
+    args = parser.parse_args()
+    if args.solver == "lagrangian" and args.predictor in ("oracle", "physics", "adaptive"):
+        parser.error("the augmented-Lagrangian solver needs a differentiable predictor (a world model)")
+    start, stop = (int(x) if x else None for x in args.seeds.split(":"))
+    seeds = SUITE_SEEDS[args.suite][start:stop]
+    conditions = CONDITIONS if args.conditions == "all" else [c for c in CONDITIONS if c.name in args.conditions.split(",")]
+    settings = load_settings(args.settings)
+    planner, predictor = make_planner(args)
+    out = Path(args.out); out.parent.mkdir(parents=True, exist_ok=True)
+    records = []
+    try:
+        for condition in conditions:
+            for seed in seeds:
+                record = run_episode(make_scenario(seed, condition, settings=settings), planner)
+                records.append(record)
+                print(f"{condition.name:>20} seed {seed:>4}: {record['outcome']:<18} t={record['time']:5.1f}s "
+                      f"plan={record['plan_seconds_mean']:.3f}s", flush=True)
+                out.write_text(json.dumps(dict(config=vars(args), settings=settings.to_dict(), records=records,
+                                               summary=summarize(records)), indent=1)+"\n")
+    finally:
+        if hasattr(predictor, "close"):
+            predictor.close()
+    for row in summarize(records):
+        print(row)
+
+
+if __name__ == "__main__":
+    main()
