@@ -51,7 +51,8 @@ python -m uav_arena.openloop --predictor my_package.my_model:make \
   --out runs/results/my_model_openloop_val.json
 ```
 
-Both take `--settings file.json` to evaluate on a tuned scenario family ([settings.md](settings.md)).
+`run.py` takes `--settings file.json` to evaluate on a tuned scenario family ([settings.md](settings.md)).
+`openloop.py` reads the family from the episodes it scores: collect them with `collect.py --settings`.
 
 ## Information rules
 

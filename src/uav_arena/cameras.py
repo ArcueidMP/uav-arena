@@ -156,6 +156,13 @@ def render_xml(scene_xml, cameras):
     """The scene XML plus the cameras, a textured floor and a sky: a model for drawing only."""
     root = ET.fromstring(scene_xml)
     world = root.find("worldbody")
+    # Track and trackcom cameras freeze their world frame at the model's reference pose, where each
+    # aircraft hangs at a hover tilt set by the true payload mass. Level aircraft there keep those frames
+    # level and independent of the hidden mass; drawn poses always come from the recorded positions.
+    for index in range(3):
+        aircraft = world.find(f"body[@name='uav{index}']")
+        if aircraft is not None:
+            aircraft.set("quat", "1 0 0 0")
     for camera in cameras:
         if camera.model_camera is not None:
             continue

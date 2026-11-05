@@ -75,17 +75,21 @@ class PayloadSettings:
     mass_range: each layout seed draws its payload mass uniformly from this range (kg).
     mass: one fixed payload mass for every scenario instead (kg); `mass_range` is then unused.
     nominal_mass: the publicly known mass (kg), which the onboard cable-load feedforward and the
-        physics reference row assume. None: the middle of the masses the family can draw (25 g by default).
+        physics reference row assume. None: the middle of the public prior (25 g by default).
     hidden: hide the true mass from non-privileged methods (`Scenario.public()`).
     max_hover_fraction: refuse a family whose heaviest payload needs more than this fraction of rotor
         thrust to hover, so the onboard controller keeps headroom. 0.75 admits payloads up to about
-        61 g. In tests, 80 g still hovered and 100 g crashed in the warm-up.
+        63 g. In tests, 80 g still hovered and 100 g crashed in the warm-up.
+    public_prior: the (low, high) range that methods are told the mass comes from (kg). None: the
+        masses the family can draw. A fixed `mass` with no wider public prior is effectively public,
+        because the prior then pins it; set e.g. public_prior=(0.01, 0.06) to hide it.
     """
     mass_range: tuple = (0.010, 0.040)
     mass: float | None = None
     nominal_mass: float | None = None
     hidden: bool = True
     max_hover_fraction: float = 0.75
+    public_prior: tuple | None = None
 
     def __post_init__(self):
         object.__setattr__(self, "mass_range", _range(self.mass_range, "PayloadSettings.mass_range", low=1e-6))
@@ -99,6 +103,11 @@ class PayloadSettings:
                 raise ValueError("PayloadSettings.nominal_mass must be positive")
         if not 0 < self.max_hover_fraction <= 1:
             raise ValueError("PayloadSettings.max_hover_fraction must lie in (0, 1]")
+        if self.public_prior is not None:
+            object.__setattr__(self, "public_prior", _range(self.public_prior, "PayloadSettings.public_prior", low=1e-6))
+            low, high = (self.mass, self.mass) if self.mass is not None else self.mass_range
+            if not self.public_prior[0] <= low <= high <= self.public_prior[1]:
+                raise ValueError("PayloadSettings.public_prior must contain every mass the family can draw")
         heaviest = max(self.prior[1], self.nominal)
         if hover_rotor_fraction(heaviest) > self.max_hover_fraction:
             raise ValueError(
@@ -108,7 +117,9 @@ class PayloadSettings:
 
     @property
     def prior(self):
-        """The (low, high) range the true mass comes from: public knowledge."""
+        """The public (low, high) range of the mass: `public_prior`, else the masses the family can draw."""
+        if self.public_prior is not None:
+            return self.public_prior
         return (self.mass, self.mass) if self.mass is not None else self.mass_range
 
     @property
@@ -222,10 +233,14 @@ class WindSettings:
         return self.speed == (0.0, 0.0) and self.gusts is None and self.turbulence is None
 
     def draw(self, seed, time_limit):
-        """The wind of one layout seed; None for still air. Each part has its own random stream."""
+        """The wind of one layout seed; None for still air.
+
+        Each part has its own random stream, [seed, 19, k] for k = 1..4, disjoint from every other
+        stream in the arena: the scenario's (13, 7, 11) and the data collector's behavior policies
+        ([seed, 17], [seed, 17, 2]; NumPy pads short seeds with zeros, so k starts at 1)."""
         if self.still:
             return None
-        streams = [np.random.default_rng([int(seed), 17, k]) for k in range(4)]
+        streams = [np.random.default_rng([int(seed), 19, k]) for k in range(1, 5)]
         speed = _draw(streams[0], self.speed)
         heading = math.radians(_draw(streams[1], self.heading) if self.heading is not None
                                else float(streams[1].uniform(0, 360)))

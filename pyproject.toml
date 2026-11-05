@@ -9,11 +9,16 @@ description = "A MuJoCo world-model arena for three-UAV cooperative transport of
 readme = "README.md"
 license = "GPL-3.0-only"
 license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md"]
-requires-python = ">=3.10"
+# mujoco==3.3.0 ships wheels for CPython 3.9 to 3.13 only.
+requires-python = ">=3.10,<3.14"
 authors = [{ name = "UAV Arena authors" }]
 keywords = ["world models", "multi-agent", "UAV", "MuJoCo", "cable-suspended payload", "benchmark"]
 classifiers = [
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Operating System :: POSIX :: Linux",
     "Operating System :: MacOS",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
@@ -28,7 +33,8 @@ dependencies = [
 [project.optional-dependencies]
 gym = ["gymnasium>=1.0"]
 # `import stable_worldmodel` (0.1.1) loads OpenCV and imageio, which it does not declare.
-plan = ["gymnasium>=1.0", "torch>=2.1", "stable-worldmodel==0.1.1", "imageio>=2.30", "opencv-python-headless>=4.8"]
+# torch 2.3 is the first release whose NumPy bridge works with NumPy 2.
+plan = ["gymnasium>=1.0", "torch>=2.3", "stable-worldmodel==0.1.1", "imageio>=2.30", "opencv-python-headless>=4.8"]
 video = ["opencv-python-headless>=4.8"]
 dev = ["pytest>=8"]
 all = ["uav-arena[gym,plan,video]"]

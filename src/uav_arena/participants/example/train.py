@@ -45,6 +45,9 @@ def main(argv=None):
     args = parser.parse_args(argv)
     torch.manual_seed(args.seed)
     data = Windows(load(args.data)[:args.episodes], horizon=HORIZON)
+    if len(data) < args.batch:              # drop_last would yield no batch, and training would never step
+        parser.error(f"{len(data)} training windows are fewer than --batch {args.batch}: "
+                     "collect more episodes or lower --batch")
     sample = np.random.default_rng(args.seed).choice(len(data), size=min(20_000, len(data)), replace=False)
     x, y = tensors(default_collate([data[int(i)] for i in sample]), "cpu")
     stats = dict(x_mean=x.mean(0), x_std=x.std(0).clamp_min(1e-6), y_mean=y.mean(0), y_std=y.std(0).clamp_min(1e-6))

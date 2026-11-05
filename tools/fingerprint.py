@@ -7,9 +7,10 @@ against either one, whichever `uav_arena` is importable:
     python tools/fingerprint.py --out release.npz
     python tools/fingerprint.py --compare frozen.npz release.npz
 
-The fingerprint covers scenario generation on every dev and test seed, closed-loop environment
-steps (physics, onboard Lee controller, observations, rewards, events), planning forks, the Gymnasium
-wrapper, the three reference planners for a few decisions, and recollected training episodes.
+The fingerprint covers scenario generation on every dev and test seed and for dense keyword layouts,
+closed-loop environment steps (physics, onboard Lee controller, observations, rewards, clearances),
+planning forks, whole straight-line transfers that end in every kind of outcome, the Gymnasium wrapper,
+the three reference planners (also mid-flight among obstacles), and recollected training episodes.
 tests/golden/arena_v03.npz is the fingerprint of the frozen code, and tests/test_parity.py checks
 the release against it.
 """
@@ -27,15 +28,18 @@ import numpy as np
 
 ENV_CASES = ((0, "static/0ms"), (3, "static+moving/100ms"), (7, "static/200ms"), (12, "static+moving/50ms"))
 DECISIONS = 40
+OUTCOME_SEEDS = range(5)          # straight transfers on these dev layouts, in all 8 conditions
+DENSE = dict(pillars=(8, 12, 16), seeds=range(10))
 PLAN_ROWS = ("physics", "adaptive", "oracle")
 PLAN_DECISIONS = 4
+MIDFLIGHT = dict(seed=3, condition="static+moving/100ms", approach=12)   # oracle planning among obstacles
 COLLECT_SEEDS = (200_000, 200_001)
 
 
 def _versions():
     import mujoco
     versions = dict(python=platform.python_version(), numpy=np.__version__, mujoco=mujoco.__version__,
-                    machine=platform.machine(), system=platform.system())
+                    machine=platform.machine(), system=platform.system(), libc=" ".join(platform.libc_ver()))
     for name in ("torch", "gymnasium", "scipy"):
         try:
             versions[name] = __import__(name).__version__
@@ -65,7 +69,8 @@ def scenarios():
             for seed in SUITE_SEEDS[name]:
                 scenario = make_scenario(seed, condition)
                 items.append([scenario.to_dict(), scenario.public().to_dict()])
-    return {"scenarios": np.str_(json.dumps(items))}
+    dense = [make_scenario(seed, CONDITIONS[4], n_pillars=n).to_dict() for n in DENSE["pillars"] for seed in DENSE["seeds"]]
+    return {"scenarios": np.str_(json.dumps(items)), "scenarios_dense": np.str_(json.dumps(dense))}
 
 
 def environment():
@@ -77,11 +82,12 @@ def environment():
         env = ArenaEnv(make_scenario(seed, condition))
         obs = env.observation()
         rng = np.random.default_rng([seed, 99])
-        states, observations, rewards = [_state(env)], [_flat(obs)], []
+        states, observations, rewards, clearances = [_state(env)], [_flat(obs)], [], []
         for k in range(DECISIONS):
             target = obs["recent_setpoints"][-1]+rng.uniform(-0.1, 0.1, (3, 3))
             obs, reward, done, info = env.step(target)
             states.append(_state(env)); observations.append(_flat(obs)); rewards.append(reward)
+            clearances.append([info["min_clearance"][k] for k in ("uav", "payload", "cable")])
             if k == 9:
                 fork = env.physics_state()
                 anchor = obs["recent_setpoints"][-1]
@@ -93,10 +99,43 @@ def environment():
         out[key+"/states"], out[key+"/observations"] = np.stack(states), np.concatenate(observations)
         out[key+"/observation_lengths"] = np.array([len(o) for o in observations])
         out[key+"/rewards"], out[key+"/outcome"] = np.array(rewards), np.str_(info["outcome"])
+        out[key+"/clearances"] = np.array(clearances)
         env.set_physics_state(fork)
         rollout = env.simulate(sequence)
         out[key+"/simulate"] = np.concatenate([rollout[k].reshape(len(sequence), -1) for k in sorted(rollout)], axis=1)
     return out
+
+
+def outcomes():
+    """Whole episodes flown by the open-loop straight transfer: obstacle hits, successes, timeouts."""
+    from uav_arena.env import ACTION_LIMIT, ArenaEnv
+    from uav_arena.replay import straight_transfer
+    from uav_arena.scenarios import CONDITIONS, make_scenario
+    rows, finals, names = [], [], []
+    for condition in CONDITIONS:
+        for seed in OUTCOME_SEEDS:
+            env = ArenaEnv(make_scenario(seed, condition))
+            obs = env.observation()
+            policy = straight_transfer(obs)
+            while not env.done:
+                obs, reward, done, info = env.step(policy(obs))
+            names.append(f"{seed} {condition.name} {info['outcome']}")
+            rows.append([info["time"], info["decisions"], info["distance_to_goal"],
+                         *(info["min_clearance"][k] for k in ("uav", "payload", "cable"))])
+            finals.append(np.concatenate([env.data.qpos, env.data.qvel, env.data.act]))
+    # The other events, from simple setpoint rules: hold the hover (timeout), sink (crash), drift (out of bounds).
+    rules = dict(hold=np.zeros(3), sink=np.array([0.0, 0.0, -0.1]), drift=np.array([0.0, ACTION_LIMIT, 0.0]))
+    for name, step in rules.items():
+        env = ArenaEnv(make_scenario(0, CONDITIONS[0]))
+        obs = env.observation()
+        while not env.done:
+            obs, reward, done, info = env.step(obs["recent_setpoints"][-1]+step)
+        names.append(f"rule-{name} {info['outcome']}")
+        rows.append([info["time"], info["decisions"], info["distance_to_goal"],
+                     *(info["min_clearance"][k] for k in ("uav", "payload", "cable"))])
+        finals.append(np.concatenate([env.data.qpos, env.data.qvel, env.data.act]))
+    return {"outcomes/episodes": np.str_("\n".join(names)), "outcomes/info": np.array(rows),
+            "outcomes/final_state": np.stack(finals)}
 
 
 def gym():
@@ -139,6 +178,30 @@ def planning():
         out[f"plan/{row}/setpoints"] = np.stack(chosen)
         if getattr(predictor, "estimates", None) is not None:
             out[f"plan/{row}/estimates"] = np.array(predictor.estimates)
+    # The oracle mid-flight: an open-loop approach toward the pillars and movers, then its own decisions.
+    from uav_arena.replay import straight_transfer
+    condition = next(c for c in CONDITIONS if c.name == MIDFLIGHT["condition"])
+    scenario = make_scenario(MIDFLIGHT["seed"], condition)
+    env = ArenaEnv(scenario)
+    obs = env.observation()
+    approach = straight_transfer(obs)
+    for _ in range(MIDFLIGHT["approach"]):
+        obs, *_ = env.step(approach(obs))
+    predictor = make_predictor("oracle", workers=2)
+    planner = ArenaPlanner(ArenaCost(predictor), samples=32, horizon=15)
+    planner.reset(scenario.seed)
+    chosen = []
+    try:
+        for _ in range(PLAN_DECISIONS):
+            if env.done:
+                break
+            setpoints = planner.act(obs, env)
+            chosen.append(setpoints)
+            obs, _, _, info = env.step(setpoints)
+    finally:
+        predictor.close()
+    out["plan/oracle_midflight/setpoints"] = np.stack(chosen)
+    out["plan/oracle_midflight/clearance"] = np.array([env.info()["min_clearance"][k] for k in ("uav", "payload", "cable")])
     return out
 
 
@@ -147,7 +210,8 @@ def collect():
     return {f"collect/{seed}": np.str_(content_sha256(collect_episode(seed))) for seed in COLLECT_SEEDS}
 
 
-PARTS = dict(scenarios=scenarios, environment=environment, gym=gym, planning=planning, collect=collect)
+PARTS = dict(scenarios=scenarios, environment=environment, outcomes=outcomes, gym=gym, planning=planning,
+             collect=collect)
 
 
 def fingerprint(parts=tuple(PARTS)):

@@ -3,8 +3,10 @@
 Cameras turn the arena into an input for vision-based world models and policies, and they film
 episodes. They never touch the physics: a `CameraRig` compiles a private copy of the scene that adds
 the cameras, a textured floor and a sky, and draws it at the positions the simulator reports. An
-environment with cameras flies exactly as one without them, with the same model and the same
-snapshots.
+environment with cameras flies exactly as one without them, with the same model, and its
+`physics_state()` snapshots are interchangeable with theirs. Full `capture()` snapshots of an
+environment with cameras also hold the scene of every record, which delayed images need, so restore
+them into environments with cameras; such an environment refuses a snapshot without scenes.
 
 ```python
 from uav_arena import ArenaEnv, CONDITIONS, make_scenario
@@ -22,7 +24,7 @@ env.close()                     # releases the rendering contexts
 |---|---|---|---|
 | `onboard_cameras(pitch=20, fovy=90)` | `uav0_fpv` … `uav2_fpv` | forward from each aircraft, pitched down by `pitch` degrees | 64 × 64 |
 | `downward_cameras(fovy=90)` | `uav0_down` … `uav2_down` | straight down from each aircraft, at its cable and the payload | 64 × 64 |
-| `chase_cameras()` | `uav0_track` … `uav2_track` | Menagerie's chase camera of each aircraft: a fixed offset behind it, level | 64 × 64 |
+| `chase_cameras()` | `uav0_track` … `uav2_track` | Menagerie's chase camera of each aircraft: a fixed offset behind it, level whatever the payload | 64 × 64 |
 | `payload_camera()` | `payload_chase` | behind the payload (−x side) and above it, following it with a level orientation | 128 × 128 |
 | `overview_camera()` | `overview` | a fixed camera that sees the whole workspace | 640 × 480 |
 
@@ -57,7 +59,9 @@ For delayed images, an environment with cameras keeps the MuJoCo positions of ev
 
 `env.render(camera)` draws any camera on demand, for example for a video. It draws the current
 scene, or the delayed one with `delayed=True`; the latter works only in an environment built with
-cameras.
+cameras. Each new `Camera` value compiles the scene and opens a GL context (tens of MB of GPU
+memory), and the environment keeps the 4 most recently used. A camera that should move with the team
+needs no new `Camera` per frame: mount it with `mode="trackcom"` or `"targetbody"`.
 
 ## Gymnasium
 

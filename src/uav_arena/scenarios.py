@@ -169,8 +169,8 @@ def _free_path(pillars, start, goal, clearance, resolution=0.05):
 
 
 LAYOUT_ATTEMPTS = 1000     # pillar layouts tried until one leaves the team a corridor
-PILLAR_DRAWS = 2000        # pillar candidates per layout before the layout is abandoned
-PACKING_FAILURES = 25      # consecutive abandoned layouts that end the search with an error
+PILLAR_DRAWS = 100_000     # pillar candidates per layout before the layout is abandoned
+PACKING_FAILURES = 3       # consecutive abandoned layouts that end the search with an error
 
 
 def team_clearance(formation_radius=0.25, uav_radius=0.06, margin=0.10):
@@ -203,8 +203,10 @@ def make_scenario(seed, condition, *, settings=None, n_pillars=None, n_movers=No
     (x0, x1), (y0, y1) = PILLAR_AREA
     abandoned = 0
     for attempt in range(LAYOUT_ATTEMPTS):
-        # Rejection sampling, as in arena-v0.3. The draw budget never binds on feasible settings, so it
-        # leaves every random draw, and hence every arena-v0.3 layout, unchanged.
+        # Rejection sampling, as in arena-v0.3. With up to 16 default-size pillars no layout needs more
+        # than about 25,000 draws (every standard seed needs at most 18 for its 4 pillars), so the budget
+        # leaves those layouts exactly as arena-v0.3 draws them. It binds only for denser requests, which
+        # arena-v0.3's sampler could take millions of draws to finish or never finish at all.
         pillars, draws = [], 0
         while len(pillars) < n_pillars and draws < PILLAR_DRAWS:
             draws += 1

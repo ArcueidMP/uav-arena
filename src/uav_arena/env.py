@@ -18,6 +18,7 @@ delayed state as the rest of it.
 """
 from __future__ import annotations
 
+from collections import OrderedDict
 from copy import copy, deepcopy
 import hashlib
 import math
@@ -41,6 +42,8 @@ N_UAV = 3                      # team size; fixed in this release (docs/roadmap.
 SETPOINT_RADIUS = 0.5          # onboard geofence: setpoint within this distance of the aircraft
 MIN_SETPOINT_HEIGHT = 0.3
 WARMUP_TIME = 5.0              # settle hover (Lee integrators) before t = 0
+WARMUP_DRIFT = 0.2             # m: a payload further than this from its start after the warm-up lost the hover
+RENDER_RIGS = 4                # cameras `render()` keeps compiled at once (each holds a GL context)
 SUCCESS_SPEED = 0.2
 SUCCESS_HOLD = 5               # consecutive decisions inside the goal tolerance
 TEAM_MIN_SEPARATION = 0.1
@@ -193,9 +196,24 @@ class ArenaEnv:
         # The hover setpoint held before t = 0 starts the first setpoint segment.
         self.log, self.actions = [], [dict(time=-DECISION_DT, setpoints=self.setpoints.copy())]
         self._record()
+        self._check_warmup()
         self.min_clearance = dict(uav=np.inf, payload=np.inf, cable=np.inf)
         self.previous_distance = self._distance()
         return self.observation()
+
+    def _check_warmup(self):
+        """Refuse an episode whose team could not hold its start hover through the warm-up (too much wind or
+        payload). Read-only: an episode that starts normally is unchanged."""
+        record = self.log[-1]
+        drift = float(np.linalg.norm(record["payload_pos"]-np.asarray(self.scenario.start, dtype=float)))
+        if (np.isfinite(self.data.qpos).all() and np.isfinite(self.data.qvel).all() and drift <= WARMUP_DRIFT
+                and record["uav_pos"][:, 2].min() >= 0.05 and record["payload_pos"][2] >= PAYLOAD_RADIUS):
+            return
+        wind = "still air" if self.wind is None else f"a mean wind of {np.linalg.norm(self.wind.mean):.1f} m/s"
+        raise ValueError(
+            f"The team could not hold its start hover through the {WARMUP_TIME:g} s warm-up (the payload ended "
+            f"{drift:.2f} m from its start) with a {1000*self.scenario.payload_mass:.1f} g payload "
+            f"(nominal {1000*self.nominal_mass:.1f} g) in {wind}. Use less wind or a lighter payload.")
 
     def _segment(self, target):
         """Setpoints for each physics step of one decision: a line from the current setpoint to `target`."""
@@ -323,14 +341,19 @@ class ArenaEnv:
     def render(self, camera, *, delayed=False):
         """One camera's image of the current scene (or, `delayed`, of the scene the decision maker sees).
 
-        `camera` is a `cameras.Camera`; a rig for it is built on first use and kept until `close()`.
+        `camera` is a `cameras.Camera`. Its rig (a compiled scene and a GL context) is built on first use;
+        the last RENDER_RIGS cameras keep theirs until `close()`. A camera that should follow the team needs
+        no new `Camera` per frame: mount it with mode="trackcom" or "targetbody".
         """
         if not hasattr(self, "_render_rigs"):
-            self._render_rigs = {}
+            self._render_rigs = OrderedDict()
         rig = self._render_rigs.get(camera)
         if rig is None:
             from .cameras import CameraRig
             rig = self._render_rigs[camera] = CameraRig(scene_xml(self.config, self.scenario), (camera,))
+            while len(self._render_rigs) > RENDER_RIGS:          # least recently used first
+                self._render_rigs.popitem(last=False)[1].close()
+        self._render_rigs.move_to_end(camera)
         record = self.log[max(len(self.log)-1-self.delay_records, 0)] if delayed else self.log[-1]
         q, mocap = self.data.qpos, self.data.mocap_pos
         if "qpos" in record:
@@ -344,7 +367,7 @@ class ArenaEnv:
         for rig in [self.cameras, *getattr(self, "_render_rigs", {}).values()]:
             if rig is not None:
                 rig.close()
-        self.cameras, self._render_rigs = None, {}
+        self.cameras, self._render_rigs = None, OrderedDict()
 
     # ---------- planning forks ----------
     def physics_state(self):
@@ -390,6 +413,9 @@ class ArenaEnv:
                     previous_distance=self.previous_distance, min_clearance=dict(self.min_clearance))
 
     def restore(self, snapshot):
+        if self.cameras is not None and any("qpos" not in record for record in snapshot["log"]):
+            raise ValueError("This environment draws delayed images and needs the scene of every record: restore a "
+                             "snapshot captured with cameras (physics_state() snapshots work everywhere)")
         plant_snapshot.restore(self.plant, snapshot["plant"])
         self.lee.restore(snapshot["lee"])
         self.setpoints[:] = snapshot["setpoints"]

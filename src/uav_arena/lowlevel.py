@@ -20,6 +20,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import platform
 import shutil
 import subprocess
 
@@ -170,23 +171,12 @@ def native_library(rate_hz=FIRMWARE_RATE_HZ):
     version = subprocess.check_output([compiler, "--version"], text=True).splitlines()[0]
     key = hashlib.sha256(json.dumps(dict(commit=UPSTREAM_COMMIT, files=upstream["files"],
         wrapper=_WRAPPER, rate_hz=rate_hz, compiler=version), sort_keys=True).encode()).hexdigest()
-    cache = build_cache()/key
-    cache.mkdir(parents=True, exist_ok=True)
+    cache = build_cache()/f"{platform.system().lower()}-{platform.machine()}"/key
     source, library = cache/"arena_lee.c", cache/"arena_lee.so"
-    with (cache/"build.lock").open("a+") as lock:
-        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
-        if not library.exists():
-            source.write_text(_WRAPPER)
-            temporary = cache/f"arena_lee.{os.getpid()}.so"
-            command = [compiler, "-shared", "-fPIC", "-O2", "-std=c99", f"-DARENA_CONTROL_HZ={rate_hz}",
-                       "-I", str(VENDOR), str(source), "-lm", "-o", str(temporary)]
-            result = subprocess.run(command, capture_output=True, text=True)
-            if result.returncode:
-                raise RuntimeError("Pinned upstream controller compilation failed:\n"+result.stderr)
-            (cache/"build.json").write_text(json.dumps(dict(build_key=key, compiler=version, command=command,
-                source_sha256=_sha(source), library_sha256=_sha(temporary), upstream_commit=UPSTREAM_COMMIT,
-                control_rate_hz=rate_hz), indent=2)+"\n")
-            os.replace(temporary, library)
+    # A finished build is read without taking the lock, so a prebuilt cache may be read-only: the library
+    # is renamed into place only after its source and build.json are written.
+    if not (library.exists() and (cache/"build.json").exists()):
+        _build(cache, compiler, version, key, rate_hz)
     build = json.loads((cache/"build.json").read_text())
     if _sha(library) != build["library_sha256"] or _sha(source) != build["source_sha256"]:
         raise AssertionError("Cached arena controller build changed")
@@ -202,6 +192,32 @@ def native_library(rate_hz=FIRMWARE_RATE_HZ):
         +[ctypes.c_void_p]*3+[ctypes.c_double]*3+[ctypes.c_void_p, ctypes.c_double, ctypes.c_void_p])
     lib.arena_control.restype = None
     return lib, build
+
+
+def _build(cache, compiler, version, key, rate_hz):
+    """Compile the controller into `cache` once, under a file lock shared by concurrent processes."""
+    try:
+        cache.mkdir(parents=True, exist_ok=True)
+        lock = (cache/"build.lock").open("a+")
+    except OSError as error:
+        raise RuntimeError(f"Cannot write the controller build cache {cache} ({error}). Point UAV_ARENA_BUILD_CACHE "
+                           "at a writable directory, or at a cache that already holds this build.") from error
+    source, library = cache/"arena_lee.c", cache/"arena_lee.so"
+    with lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        if library.exists():                 # another process finished it while we waited
+            return
+        source.write_text(_WRAPPER)
+        temporary = cache/f"arena_lee.{os.getpid()}.so"
+        command = [compiler, "-shared", "-fPIC", "-O2", "-std=c99", f"-DARENA_CONTROL_HZ={rate_hz}",
+                   "-I", str(VENDOR), str(source), "-lm", "-o", str(temporary)]
+        result = subprocess.run(command, capture_output=True, text=True)
+        if result.returncode:
+            raise RuntimeError("Pinned upstream controller compilation failed:\n"+result.stderr)
+        (cache/"build.json").write_text(json.dumps(dict(build_key=key, compiler=version, command=command,
+            source_sha256=_sha(source), library_sha256=_sha(temporary), upstream_commit=UPSTREAM_COMMIT,
+            control_rate_hz=rate_hz), indent=2)+"\n")
+        os.replace(temporary, library)
 
 
 class BatchedLee:

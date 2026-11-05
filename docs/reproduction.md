@@ -13,24 +13,35 @@ this.
 ## The checks
 
 - **`tests/test_parity.py`** compares the release with `tests/golden/arena_v03.npz`, a fingerprint of
-  the frozen code made by `tools/fingerprint.py`. The fingerprint holds 36 arrays:
-  - the scenario dictionaries (public and true) of every `dev` and `test` seed in all 8 conditions;
-  - four closed-loop episodes of 40 decisions. For each: the full MuJoCo state, rotor commands and
-    onboard controller memory after every decision; observations, rewards and outcomes; and a
-    15-decision `simulate` rollout from a planning fork;
+  the frozen code made by `tools/fingerprint.py`. The fingerprint holds 46 arrays:
+  - the scenario dictionaries (public and true) of every `dev` and `test` seed in all 8 conditions,
+    and keyword layouts with 8, 12 and 16 pillars;
+  - four closed-loop episodes of up to 40 decisions. For each: the full MuJoCo state, rotor commands
+    and onboard controller memory after every decision; observations, rewards, clearances and
+    outcomes; and a 15-decision `simulate` rollout from a planning fork;
+  - 43 whole episodes that end in every kind of outcome. 40 are straight-line transfers on 5 `dev`
+    layouts in all 8 conditions (24 obstacle collisions and 16 successes). Three follow simple setpoint
+    rules that end in a timeout, a crash and an exit from the workspace. Each keeps its outcome, time,
+    clearances and final state;
   - the Gymnasium wrapper's observations, rewards and episode flags;
   - the first four decisions of the oracle, physics and adaptive rows (shared MPPI, 32 samples),
-    including the adaptive row's mass estimates;
+    including the adaptive row's mass estimates, and four oracle decisions taken mid-flight among
+    pillars and movers;
   - the content hashes of two recollected training episodes.
+- The research code's arena tests (harness, recorder, open loop, training windows, replay, example
+  participant and reference rows) are ported unchanged, minus two that test modules this release does
+  not ship.
 - **`tests/test_manifests.py`** recollects training and validation episodes and compares their content
   hashes with the published manifests of the standard datasets (`uav_arena/manifests/`). The research
   code collected those datasets.
 
-Both checks have passed bit for bit on Linux x86-64 with MuJoCo 3.3.0 and gcc 15.2, in two
+Both checks have passed bit for bit on Linux x86-64 with MuJoCo 3.3.0, gcc 15.2 and glibc 2.43, in two
 environments: Python 3.10 with NumPy 2.2.6 and PyTorch 2.11 (the research environment), and
-Python 3.12 with NumPy 2.5.4, SciPy 1.18 and PyTorch 2.15 (CPU). On another platform, floating-point
-results can differ in the last bits. The parity test then falls back to a tight tolerance and skips
-the dataset hashes.
+Python 3.12 with NumPy 2.5.4, SciPy 1.18 and PyTorch 2.15 (CPU). So the Python, NumPy and PyTorch
+versions do not matter; the platform can. A different CPU architecture, MuJoCo build, C compiler or C
+library can change floating-point results in the last bits. The research code's datasets, for
+example, do not reproduce on Ubuntu 22.04. On such a platform the parity test reports a mismatch as
+a skip that names the difference, never as a pass; set `UAV_ARENA_STRICT_PARITY=1` to make it fail.
 
 ## Fingerprinting the frozen code yourself
 

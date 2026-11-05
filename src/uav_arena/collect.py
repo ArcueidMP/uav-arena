@@ -21,6 +21,7 @@ from dataclasses import replace
 import hashlib
 import json
 import multiprocessing as mp
+import os
 from pathlib import Path
 import subprocess
 
@@ -195,16 +196,24 @@ def verify(directory, references=None, processes=None):
 
 
 def source_version():
-    """The package version, plus the Git description and commit when running from a checkout."""
+    """The package version, plus the Git description and commit when this module runs from a uav-arena
+    checkout (never from a repository that merely contains an installed copy)."""
     from . import __version__
+    info = dict(version=__version__, describe="", commit="")
+    root = Path(__file__).resolve().parents[2]              # <checkout>/src/uav_arena/collect.py
+    pyproject = root/"pyproject.toml"
+    if not ((root/".git").exists() and pyproject.is_file() and 'name = "uav-arena"' in pyproject.read_text()):
+        return info
 
     def git(*args):
         try:
-            return subprocess.run(["git", *args], capture_output=True, text=True, cwd=Path(__file__).parent).stdout.strip()
+            result = subprocess.run(["git", *args], capture_output=True, text=True, cwd=root,
+                                    env=dict(os.environ, GIT_CEILING_DIRECTORIES=str(root.parent)))
         except OSError:
             return ""
-    return dict(version=__version__, describe=git("describe", "--tags", "--always", "--dirty"),
-                commit=git("rev-parse", "HEAD"))
+        return result.stdout.strip() if result.returncode == 0 else ""
+    info.update(describe=git("describe", "--tags", "--always", "--dirty"), commit=git("rev-parse", "--verify", "HEAD"))
+    return info
 
 
 def main():

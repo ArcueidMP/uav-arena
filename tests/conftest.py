@@ -1,9 +1,15 @@
+import ctypes.util
 import os
 import sys
 
-# Headless rendering: MuJoCo picks its OpenGL backend when it is first imported.
-if sys.platform.startswith("linux") and not os.environ.get("DISPLAY"):
-    os.environ.setdefault("MUJOCO_GL", "egl")
+# Headless rendering: MuJoCo picks its OpenGL backend when it is first imported. Choose EGL or OSMesa only
+# when its library is present; otherwise leave MUJOCO_GL alone, so that MuJoCo still imports and only the
+# rendering tests skip.
+if sys.platform.startswith("linux") and not os.environ.get("DISPLAY") and "MUJOCO_GL" not in os.environ:
+    for backend, library in (("egl", "EGL"), ("osmesa", "OSMesa")):
+        if ctypes.util.find_library(library):
+            os.environ["MUJOCO_GL"] = backend
+            break
 
 import pytest  # noqa: E402
 

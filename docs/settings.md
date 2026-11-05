@@ -15,20 +15,21 @@ scenario = make_scenario(seed=7, condition=CONDITIONS[2], settings=settings)
 ## How settings become a scenario
 
 - **Seeded draws.** A layout seed fixes every draw. The payload mass comes from the random stream
-  `[seed, 13]`, as in arena-v0.3. The wind comes from four separate streams `[seed, 17, k]`: one each
-  for the mean speed, the mean heading, the gusts and the turbulence. Changing one wind part leaves
-  the other parts unchanged. All eight conditions of a seed share the layout, the mass and the wind.
+  `[seed, 13]`, as in arena-v0.3. The wind comes from four separate streams `[seed, 19, k]`, k = 1 to
+  4: one each for the mean speed, the mean heading, the gusts and the turbulence. Changing one wind
+  part leaves the other parts unchanged. No stream is shared with another part of the arena,
+  including the data collector's behavior policies, so the hidden wind is independent of the
+  actions in collected data. All eight conditions of a seed share the layout, the mass and the wind.
 - **Overrides.** Keyword arguments of `make_scenario` win over the settings: `payload_mass=0.03`
   fixes the true mass, `wind=Wind(...)` fixes the true wind, and `n_pillars=` and the other obstacle
-  arguments set the layout.
+  arguments set the layout. Overrides go through the same validation as the settings.
 - **What a scenario carries.** `payload_mass` and `wind` are the true values. `nominal_mass` and
   `payload_prior` are public. `hidden` names the fields that `Scenario.public()` removes.
   `Scenario.to_dict()` leaves out every release field that holds its arena-v0.3 default, so
   arena-v0.3 scenario dictionaries, and the content hashes of datasets that store them, are
   unchanged.
 - **JSON.** `TaskSettings.to_dict()` / `TaskSettings.from_dict()` and `load_settings(path)` read and
-  write settings. Every tool takes them as `--settings file.json`. Fields left out keep their
-  defaults:
+  write settings. `run`, `collect`, `record` and `replay record` take them as `--settings file.json`; `openloop` and `harness` read the scenario family from the episode files those tools wrote. Fields left out keep their defaults:
 
 ```json
 {
@@ -47,9 +48,13 @@ scenario = make_scenario(seed=7, condition=CONDITIONS[2], settings=settings)
 |---|---|---|
 | `mass_range` | each layout seed draws the payload mass uniformly from this range (kg) | (0.010, 0.040) |
 | `mass` | one fixed mass for every scenario instead (kg) | None |
-| `nominal_mass` | the publicly known mass (kg): the onboard cable-load feedforward and the physics row assume it | None: the middle of the masses the family can draw (25 g) |
+| `nominal_mass` | the publicly known mass (kg): the onboard cable-load feedforward and the physics row assume it | None: the middle of the public prior (25 g) |
 | `hidden` | hide the true mass from non-privileged methods | True |
 | `max_hover_fraction` | refuse families whose heaviest payload needs more than this fraction of rotor thrust to hover | 0.75 |
+| `public_prior` | the (low, high) range methods are told the mass comes from (kg); it must contain every mass the family can draw | None: the masses the family can draw |
+
+A fixed `mass` with no wider `public_prior` is effectively public, because the prior then pins it.
+To hide a fixed mass, give a wider prior, e.g. `PayloadSettings(mass=0.05, public_prior=(0.01, 0.06))`.
 
 **Physics.** The payload is a 2.5 cm sphere hanging from all three cables at one point, so its mass
 sets the cable tensions. Each aircraft's onboard feedforward adds the cable load of
@@ -70,7 +75,10 @@ formation statically (`hover_rotor_fraction`), next to the peak measured while h
 | 120 g | over 100 % | refused: no hover exists |
 
 `max_hover_fraction=0.75` admits payloads up to 62.9 g (`max_payload_mass(0.75)`), which leaves a
-quarter of the thrust for control. Raise it to accept less headroom.
+quarter of the thrust for control. Raise it to accept less headroom. Whatever the settings,
+`ArenaEnv` checks the hover at the end of the 5 s warm-up. If the team lost it (the payload more
+than 0.2 m from its start, an aircraft or the payload down, or a non-finite state), `ArenaEnv`
+refuses the scenario with an error instead of starting an episode that is already lost.
 
 **What methods see.** By default the true mass is hidden, and the nominal mass and the prior range
 are public. The physics row plans with the nominal mass, or with the true mass when `hidden=False`.
@@ -128,6 +136,10 @@ downwash between aircraft.
 still air, and the oracle knows the wind exactly. With `hidden=False` the public scenario carries
 the wind, and the physics rows plan with it.
 
+**How strong.** With a 10–40 g payload, the team holds its start hover in mean winds up to about
+9 m/s. From 10 to 12 m/s, depending on the layout, the payload and the wind direction, the warm-up
+fails and `ArenaEnv` refuses the scenario.
+
 ## Obstacles
 
 | Field | Meaning | Default |
@@ -137,6 +149,13 @@ the wind, and the physics rows plan with it.
 | `n_movers` | spheres moving back and forth across the corridor, in the `static+moving` conditions | 2 |
 | `mover_radius` | sphere radius (m) | 0.15 |
 | `mover_speed` | speed range (m/s) | (0.25, 0.45) |
+
+Settings that cannot fit `n_pillars` pillars of at least the smallest radius are refused when they
+are made (`max_pillars`). Layouts are drawn by rejection sampling, as in arena-v0.3. Up to 16
+default-size pillars, every layout is exactly the one arena-v0.3 draws. Denser requests abandon a
+layout after 100,000 draws (arena-v0.3's sampler could take millions, or never finish), so their
+layouts can differ from arena-v0.3's. `make_scenario` stops with an error after 3 abandoned layouts
+in a row, or after 1000 layouts that leave the team no corridor.
 
 Every layout keeps a corridor that the whole team fits through. The Gymnasium observation grows with
 the counts: its length is 6 + 45 + 3 + 3·`n_pillars` + 7·`n_movers` + 36 + 2.

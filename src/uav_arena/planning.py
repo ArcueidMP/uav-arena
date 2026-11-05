@@ -180,8 +180,11 @@ class PhysicsPredictor(TrueSimPredictor):
     def observe(self, obs, layout):
         """Advance the shadow model to the observation, re-sync what is observed, bridge to the decision.
 
-        `layout` supplies start, goal and obstacles; its payload mass is replaced by the nominal one.
+        `layout` supplies start, goal and obstacles. Only its public fields count (`Scenario.public()` is
+        applied again here): the payload mass is the nominal one unless the scenario publishes the true
+        mass, and the wind is still air unless the scenario publishes it.
         """
+        layout = layout.public()
         if self.model is None:
             self.scenario = dataclasses.replace(layout, payload_mass=self._assumed_mass(layout))
             self.model = ArenaEnv(self.scenario)
@@ -257,6 +260,7 @@ class AdaptivePhysicsPredictor(PhysicsPredictor):
         self.bank, self.errors, self.estimates = None, deque(maxlen=self.window), []
 
     def observe(self, obs, layout):
+        layout = layout.public()                    # only what the scenario publishes
         if self.bank is None:
             if self.fixed_candidates is not None:
                 self.candidates = self.fixed_candidates

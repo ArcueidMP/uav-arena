@@ -29,7 +29,8 @@ cd uav-arena
 pip install -e ".[all]"
 ```
 
-You need Python 3.10 or newer, Linux or macOS, and a C compiler (`cc`). The onboard controller is
+You need Python 3.10 to 3.13 (MuJoCo 3.3.0 has no wheels for 3.14), Linux or macOS, and a C compiler
+(`cc`). The onboard controller is
 compiled on first use and cached in `~/.cache/uav-arena` (or `$UAV_ARENA_BUILD_CACHE`). MuJoCo is
 pinned to 3.3.0, because MuJoCo releases change numerics. To render cameras on a machine without a
 display, set `MUJOCO_GL=egl` (GPU) or `MUJOCO_GL=osmesa` (CPU).
@@ -74,7 +75,8 @@ settings = TaskSettings(
 env = ArenaEnv(make_scenario(seed=0, condition=CONDITIONS[5], settings=settings))
 ```
 
-Settings round-trip through JSON, and every command-line tool takes `--settings file.json`.
+Settings round-trip through JSON. `run`, `collect`, `record` and `replay record` take them as
+`--settings file.json`; `openloop` and `harness` read the scenario family from the episode files.
 [docs/settings.md](docs/settings.md) covers each setting: its physics, its limits (for example, the
 heaviest payload the team can carry with control headroom), and what the methods may see.
 
