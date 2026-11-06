@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.0 (unreleased)
+## 0.1.0 (2026-11-06)
 
 The first release, extracted from the frozen research code (arena-v0.3,
 [docs/reproduction.md](docs/reproduction.md)). With the default settings it reproduces arena-v0.3
